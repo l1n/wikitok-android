@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
@@ -149,7 +150,7 @@ fun WikiTokApp(vm: WikiTokViewModel = viewModel()) {
 fun FeedScreen(vm: WikiTokViewModel, onOpenSaved: () -> Unit) {
     val feed by vm.feed.collectAsState()
     val saved by vm.saved.collectAsState()
-    val language by vm.language.collectAsState()
+    val languages by vm.languages.collectAsState()
     val error by vm.error.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -222,7 +223,7 @@ fun FeedScreen(vm: WikiTokViewModel, onOpenSaved: () -> Unit) {
                 fontWeight = FontWeight.Black,
             )
             Spacer(modifier = Modifier.weight(1f))
-            LanguagePicker(current = language, onSelect = { vm.setLanguage(it) })
+            LanguagePicker(selected = languages, onToggle = { vm.toggleLanguage(it) })
             IconButton(onClick = onOpenSaved) {
                 Icon(Icons.Filled.Bookmarks, contentDescription = "Saved articles", tint = Color.White)
             }
@@ -231,7 +232,7 @@ fun FeedScreen(vm: WikiTokViewModel, onOpenSaved: () -> Unit) {
 }
 
 @Composable
-fun LanguagePicker(current: Language, onSelect: (Language) -> Unit) {
+fun LanguagePicker(selected: List<Language>, onToggle: (Language) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         Row(
@@ -244,25 +245,32 @@ fun LanguagePicker(current: Language, onSelect: (Language) -> Unit) {
         ) {
             Icon(
                 Icons.Filled.Language,
-                contentDescription = "Language",
+                contentDescription = "Languages",
                 tint = Color.White,
                 modifier = Modifier.size(16.dp),
             )
+            val label = selected.first().code.uppercase() +
+                if (selected.size > 1) "+${selected.size - 1}" else ""
             Text(
-                " ${current.code.uppercase()}",
+                " $label",
                 color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
+        // Multi-select: the menu stays open so several languages can be toggled.
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             LANGUAGES.forEach { lang ->
                 DropdownMenuItem(
                     text = { Text("${lang.label} (${lang.code})") },
-                    onClick = {
-                        expanded = false
-                        onSelect(lang)
+                    leadingIcon = {
+                        if (lang in selected) {
+                            Icon(Icons.Filled.Check, contentDescription = "Selected")
+                        } else {
+                            Spacer(modifier = Modifier.size(24.dp))
+                        }
                     },
+                    onClick = { onToggle(lang) },
                 )
             }
         }

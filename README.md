@@ -43,7 +43,11 @@ like, the smarter the feed gets.
   profile — as a big-picture notification; tapping opens the app on that
   article. Test hook: `--ez notify_now true`.
 - **Save, share, open**: heart persists to DataStore, share sheet, open in browser.
-- **10 languages**: switching reloads the feed from that Wikipedia edition.
+- **10 languages, simultaneously**: pick any set of Wikipedia editions; each
+  batch fetches from all of them in parallel and interleaves round-robin so
+  the feed mixes languages card by card. Digest notifications rotate through
+  the selection. (Note: the embedding model is English-tuned, so cross-language
+  personalization is approximate for non-Latin scripts.)
 
 ## Building (nix)
 

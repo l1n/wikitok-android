@@ -39,7 +39,11 @@ class DailyDigestWorker(context: Context, params: WorkerParameters) :
             Log.d("WikiTok", "digest: no notification permission, skipping")
             return Result.success()
         }
-        val lang = ctx.wikitokDataStore.data.first()[stringPreferencesKey("language")] ?: "en"
+        val prefs = ctx.wikitokDataStore.data.first()
+        // Rotate through the user's selected languages, one per digest.
+        val lang = (prefs[stringPreferencesKey("languages")]?.split(',')
+            ?: prefs[stringPreferencesKey("language")]?.let { listOf(it) })
+            ?.filter { it.isNotBlank() }?.randomOrNull() ?: "en"
         val personalized = runCatching {
             val ranked = Recommender(ctx).rank(WikipediaApi.fetchRandomBatch(lang))
             ranked.firstOrNull { it.thumbnail != null } ?: ranked.firstOrNull()

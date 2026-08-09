@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -39,8 +41,8 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
     private val _feed = MutableStateFlow<List<Article>>(emptyList())
     val feed: StateFlow<List<Article>> = _feed
 
-    private val _language = MutableStateFlow(LANGUAGES.first())
-    val language: StateFlow<Language> = _language
+    private val _languages = MutableStateFlow(listOf(LANGUAGES.first()))
+    val languages: StateFlow<List<Language>> = _languages
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
@@ -48,7 +50,7 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
     val saved: StateFlow<List<Article>> = repo.saved
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private val seen = mutableSetOf<Long>()
+    private val seen = mutableSetOf<String>()
     private var loading = false
     private var batchCount = 0
 
@@ -56,21 +58,25 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
         val debug = debugTitles
         if (debug != null) {
             viewModelScope.launch {
-                runCatching { WikipediaApi.fetchByTitles(_language.value.code, debug) }
+                runCatching { WikipediaApi.fetchByTitles(primaryLang(), debug) }
                     .onSuccess { batch ->
-                        _feed.value = batch.filter { seen.add(it.pageid) } + _feed.value
+                        _feed.value = batch.filter { seen.add(key(it)) } + _feed.value
                     }
             }
         } else {
             loadDailyHighlight()
         }
         loadMore()
-        // Restore the persisted language choice (also read by the digest worker).
+        // Restore the persisted language selection (also read by the digest worker).
         viewModelScope.launch {
-            val stored = getApplication<Application>().wikitokDataStore.data
-                .first()[stringPreferencesKey("language")]
-            LANGUAGES.find { it.code == stored && it != _language.value }
-                ?.let { setLanguage(it) }
+            val prefs = getApplication<Application>().wikitokDataStore.data.first()
+            val stored = prefs[stringPreferencesKey("languages")]?.split(',')
+                ?: prefs[stringPreferencesKey("language")]?.let { listOf(it) }
+            val restored = stored?.mapNotNull { code -> LANGUAGES.find { it.code == code } }
+            if (!restored.isNullOrEmpty() && restored != _languages.value) {
+                _languages.value = restored
+                resetAndReload()
+            }
         }
     }
 
@@ -78,15 +84,19 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
         if (_feed.value.size - currentIndex < 5) loadMore()
     }
 
-    /** Prepend today's featured article, if this language edition publishes one. */
+    private fun primaryLang() = _languages.value.first().code
+
+    private fun key(article: Article) = "${article.lang}-${article.pageid}"
+
+    /** Prepend today's featured article from the primary language edition. */
     private fun loadDailyHighlight() {
-        val lang = _language.value.code
+        val lang = primaryLang()
         viewModelScope.launch {
             val today = java.time.LocalDate.now()
             runCatching {
                 WikipediaApi.fetchDailyFeatured(lang, today.year, today.monthValue, today.dayOfMonth)
             }.getOrNull()?.let { tfa ->
-                if (_language.value.code == lang && seen.add(tfa.pageid)) {
+                if (primaryLang() == lang && seen.add(key(tfa))) {
                     val current = _feed.value
                     // Prepending after the user can see the feed shifts every pager
                     // index (and the visible page); slot in as the next card instead.
@@ -100,10 +110,10 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
     fun loadMore() {
         if (loading) return
         loading = true
-        val lang = _language.value.code
+        val langs = _languages.value.map { it.code }
         // Alternate random batches with morelike batches seeded from a saved article,
         // so the feed drifts toward what the user hearts.
-        val seed = saved.value.filter { it.lang == lang && !it.isHighlight }
+        val seed = saved.value.filter { it.lang in langs && !it.isHighlight }
             .randomOrNull()?.takeIf { batchCount % 2 == 1 }
         batchCount++
         viewModelScope.launch {
@@ -111,22 +121,34 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
             // (bounded) so pagination never stalls.
             var useSeed = seed
             for (attempt in 1..3) {
+                val s = useSeed
+                val perLang = (24 / langs.size).coerceAtLeast(8)
                 val result = runCatching {
-                    useSeed?.let { s ->
-                        WikipediaApi.fetchRelatedBatch(lang, s.title)
-                            .ifEmpty { WikipediaApi.fetchRandomBatch(lang) }
-                    } ?: WikipediaApi.fetchRandomBatch(lang)
+                    coroutineScope {
+                        langs.map { lang ->
+                            async {
+                                if (s != null && s.lang == lang) {
+                                    WikipediaApi.fetchRelatedBatch(lang, s.title, perLang)
+                                        .ifEmpty { WikipediaApi.fetchRandomBatch(lang, perLang) }
+                                } else {
+                                    WikipediaApi.fetchRandomBatch(lang, perLang)
+                                }
+                            }
+                        }.map { it.await() }
+                    }
                 }
-                val batch = result.getOrNull()
-                if (batch == null) {
+                val batches = result.getOrNull()
+                if (batches == null) {
                     if (_feed.value.isEmpty()) {
                         _error.value = result.exceptionOrNull()?.message ?: "Network error"
                     }
                     break
                 }
-                if (_language.value.code != lang) break
+                if (_languages.value.map { it.code } != langs) break
                 _error.value = null
-                val fresh = recommender.rank(batch.filter { seen.add(it.pageid) })
+                val fresh = recommender.rank(
+                    interleave(batches).filter { seen.add(key(it)) }
+                )
                 _feed.value = _feed.value + fresh
                 if (fresh.isNotEmpty()) break
                 useSeed = null
@@ -135,20 +157,59 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setLanguage(language: Language) {
-        if (language == _language.value) return
-        _language.value = language
-        viewModelScope.launch {
-            getApplication<Application>().wikitokDataStore.edit { prefs ->
-                prefs[stringPreferencesKey("language")] = language.code
+    /** Round-robin across per-language batches so no language dominates a stretch. */
+    private fun interleave(batches: List<List<Article>>): List<Article> {
+        val result = mutableListOf<Article>()
+        val iterators = batches.map { it.iterator() }
+        var added = true
+        while (added) {
+            added = false
+            for (iter in iterators) {
+                if (iter.hasNext()) {
+                    result += iter.next()
+                    added = true
+                }
             }
         }
+        return result
+    }
+
+    fun toggleLanguage(language: Language) {
+        val current = _languages.value
+        val updated = when {
+            language !in current -> current + language
+            current.size == 1 -> return // at least one language stays selected
+            else -> current - language
+        }
+        _languages.value = updated
+        viewModelScope.launch {
+            getApplication<Application>().wikitokDataStore.edit { prefs ->
+                prefs[stringPreferencesKey("languages")] =
+                    updated.joinToString(",") { it.code }
+            }
+        }
+        // Keep still-selected articles in place; just top up with the new mix.
+        val codes = updated.map { it.code }.toSet()
+        _feed.value = _feed.value.filter { it.lang in codes }
+        _error.value = null
+        loadMoreSoon()
+    }
+
+    /** loadMore that waits out any in-flight load instead of being swallowed by it. */
+    private fun loadMoreSoon() {
+        viewModelScope.launch {
+            while (loading) kotlinx.coroutines.delay(100)
+            loadMore()
+        }
+    }
+
+    private fun resetAndReload() {
         seen.clear()
         _feed.value = emptyList()
         _error.value = null
         batchCount = 0
         loadDailyHighlight()
-        loadMore()
+        loadMoreSoon()
     }
 
     fun toggleSaved(article: Article) {

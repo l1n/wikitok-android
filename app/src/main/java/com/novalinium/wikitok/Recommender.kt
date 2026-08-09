@@ -33,8 +33,8 @@ class Recommender(private val context: Context) {
     private val profileKey = stringPreferencesKey("user_profile_v1")
     private var profile: FloatArray? = null
     private var profileLoaded = false
-    private val cache = object : LinkedHashMap<Long, FloatArray>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, FloatArray>) =
+    private val cache = object : LinkedHashMap<String, FloatArray>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>) =
             size > 512
     }
 
@@ -52,8 +52,9 @@ class Recommender(private val context: Context) {
         article.title + ". " + article.extract.take(300)
 
     private suspend fun embedCached(article: Article): FloatArray {
-        cache[article.pageid]?.let { return it }
-        return embedder.embed(embeddingText(article)).also { cache[article.pageid] = it }
+        val key = "${article.lang}-${article.pageid}"
+        cache[key]?.let { return it }
+        return embedder.embed(embeddingText(article)).also { cache[key] = it }
     }
 
     suspend fun onLiked(article: Article) = onEngaged(article, WEIGHT_LIKE, "like")
