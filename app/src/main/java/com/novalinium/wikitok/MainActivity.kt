@@ -152,6 +152,20 @@ fun FeedScreen(vm: WikiTokViewModel, onOpenSaved: () -> Unit) {
                 LaunchedEffect(pagerState.currentPage, feed.size) {
                     vm.ensureLoaded(pagerState.currentPage)
                 }
+                // Dwell tracking: keyed on the displayed article (not the index) so
+                // feed appends/inserts don't split or misattribute a dwell.
+                val currentArticle = feed.getOrNull(pagerState.currentPage)
+                LaunchedEffect(currentArticle?.pageid, currentArticle?.lang) {
+                    val article = currentArticle ?: return@LaunchedEffect
+                    val start = android.os.SystemClock.elapsedRealtime()
+                    try {
+                        kotlinx.coroutines.awaitCancellation()
+                    } finally {
+                        val seconds =
+                            (android.os.SystemClock.elapsedRealtime() - start) / 1000f
+                        vm.onDwell(article, seconds)
+                    }
+                }
                 VerticalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
@@ -164,6 +178,7 @@ fun FeedScreen(vm: WikiTokViewModel, onOpenSaved: () -> Unit) {
                         isSaved = vm.isSaved(article, saved),
                         isActive = pagerState.currentPage == page,
                         onToggleSaved = { vm.toggleSaved(article) },
+                        onExpanded = { vm.onExtractExpanded(article) },
                     )
                 }
             }
@@ -249,6 +264,7 @@ fun ArticleCard(
     isSaved: Boolean,
     onToggleSaved: () -> Unit,
     isActive: Boolean = false,
+    onExpanded: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var expanded by remember(article.pageid) { mutableStateOf(false) }
@@ -279,7 +295,10 @@ fun ArticleCard(
             .background(Color(0xFF101318))
             .pointerInput(article.pageid) {
                 detectTapGestures(
-                    onTap = { expanded = !expanded },
+                    onTap = {
+                        expanded = !expanded
+                        if (expanded) onExpanded()
+                    },
                     onDoubleTap = {
                         if (!isSaved) onToggleSaved()
                         burst++

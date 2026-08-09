@@ -145,6 +145,14 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun onDwell(article: Article, seconds: Float) {
+        viewModelScope.launch { recommender.onDwell(article, seconds) }
+    }
+
+    fun onExtractExpanded(article: Article) {
+        viewModelScope.launch { recommender.onExpanded(article) }
+    }
+
     fun isSaved(article: Article, savedList: List<Article>): Boolean =
         savedList.any { it.pageid == article.pageid && it.lang == article.lang }
 }

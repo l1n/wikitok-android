@@ -16,6 +16,19 @@ import kotlin.random.Random
  *    with epsilon-greedy exploration so the feed never collapses into a bubble.
  */
 class Recommender(private val context: Context) {
+    companion object {
+        const val WEIGHT_LIKE = 0.5f
+        const val WEIGHT_EXPAND = 0.15f
+
+        /** Per-second dwell credit; 30s of reading ≈ a quarter of a like. */
+        const val WEIGHT_DWELL_PER_SEC = 0.004f
+        const val DWELL_MIN_SEC = 3f
+        const val DWELL_CAP_SEC = 30f
+
+        /** Per-event decay keeps the profile drifting toward recent interests. */
+        private const val DECAY = 0.99f
+    }
+
     private val embedder = ArticleEmbedder(context)
     private val profileKey = stringPreferencesKey("user_profile_v1")
     private var profile: FloatArray? = null
@@ -43,25 +56,34 @@ class Recommender(private val context: Context) {
         return embedder.embed(embeddingText(article)).also { cache[article.pageid] = it }
     }
 
-    /** Fold a liked article into the user profile (EMA, then renormalize). */
-    suspend fun onLiked(article: Article) {
+    suspend fun onLiked(article: Article) = onEngaged(article, WEIGHT_LIKE, "like")
+
+    suspend fun onExpanded(article: Article) = onEngaged(article, WEIGHT_EXPAND, "expand")
+
+    suspend fun onDwell(article: Article, seconds: Float) {
+        if (seconds < DWELL_MIN_SEC) return
+        onEngaged(article, WEIGHT_DWELL_PER_SEC * seconds.coerceAtMost(DWELL_CAP_SEC), "dwell ${seconds.toInt()}s")
+    }
+
+    /**
+     * Fold an engagement signal into the profile. The profile is a decaying
+     * weighted sum of article embeddings (normalized only at ranking time), so
+     * strong signals dominate weak ones in proportion to their weights.
+     */
+    private suspend fun onEngaged(article: Article, weight: Float, signal: String) {
         if (!embedder.ensureReady()) return
         runCatching {
             val e = embedCached(article)
             val p = loadProfile()
-            val updated = if (p == null) e.copyOf() else FloatArray(ArticleEmbedder.DIM) { i ->
-                0.8f * p[i] + 0.2f * e[i]
+            val updated = FloatArray(ArticleEmbedder.DIM) { i ->
+                (p?.get(i) ?: 0f) * DECAY + weight * e[i]
             }
-            var norm = 0f
-            for (x in updated) norm += x * x
-            norm = sqrt(norm).coerceAtLeast(1e-9f)
-            for (i in updated.indices) updated[i] /= norm
             profile = updated
             context.wikitokDataStore.edit { prefs ->
                 prefs[profileKey] = updated.joinToString(",")
             }
-            Log.d("WikiTok", "profile updated from like: ${article.title}")
-        }.onFailure { Log.e("WikiTok", "onLiked failed", it) }
+            Log.d("WikiTok", "profile updated ($signal, w=%.3f): ${article.title}".format(weight))
+        }.onFailure { Log.e("WikiTok", "onEngaged failed", it) }
     }
 
     /**
@@ -73,7 +95,11 @@ class Recommender(private val context: Context) {
         loadProfile() ?: return candidates
         if (!embedder.ensureReady()) return candidates
         return runCatching {
-            val p = profile ?: return candidates
+            val raw = profile ?: return candidates
+            var pNorm = 0f
+            for (x in raw) pNorm += x * x
+            pNorm = sqrt(pNorm).coerceAtLeast(1e-9f)
+            val p = FloatArray(raw.size) { raw[it] / pNorm }
             val scored = candidates.map { a ->
                 var s = 0f
                 val e = embedCached(a)

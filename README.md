@@ -26,11 +26,12 @@ like, the smarter the feed gets.
   [Monolith](https://arxiv.org/abs/2209.07663), sized for a phone. Candidate
   generation alternates random batches with CirrusSearch `morelike:` batches
   seeded from your liked articles; ranking embeds each candidate with
-  all-MiniLM-L6-v2 (int8 ONNX, ~23MB, downloaded on first like) and scores it
-  against a user profile vector maintained as an EMA of liked-article
-  embeddings — with ε-greedy exploration slots so the feed never collapses
-  into a bubble. Like *Apollo 11* and the next batch ranks *Neil Armstrong*
-  on top; that's the whole idea.
+  all-MiniLM-L6-v2 (int8 ONNX, ~23MB, downloaded on first engagement) and
+  scores it against a user profile vector — a decaying weighted sum of
+  embeddings from explicit likes (strong) and implicit signals: dwell time
+  and expanding an extract (weak, dense) — with ε-greedy exploration slots
+  so the feed never collapses into a bubble. Like *Apollo 11* and the next
+  batch ranks *Neil Armstrong* on top; that's the whole idea.
 - **Instant video**: articles with Wikimedia Commons videos autoplay them
   (muted, looping) the moment the card becomes current, via ExoPlayer and the
   TimedMediaHandler transcode derivatives.
