@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.sqrt
 import kotlin.random.Random
 
@@ -29,10 +30,36 @@ class Recommender(private val context: Context) {
         private const val DECAY = 0.99f
     }
 
-    private val embedder = ArticleEmbedder(context)
-    private val profileKey = stringPreferencesKey("user_profile_v1")
+    // v2: embedding space changed from MiniLM to our Wikipedia-trained model
+    private val profileKey = stringPreferencesKey("user_profile_v2")
     private var profile: FloatArray? = null
     private var profileLoaded = false
+
+    @Volatile
+    private var embedder: WikiEmbedder? = null
+    private var embedderFailed = false
+    private val initMutex = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun ensureReady(): Boolean {
+        embedder?.let { return true }
+        if (embedderFailed) return false
+        return initMutex.withLock {
+            embedder?.let { return true }
+            if (embedderFailed) return false
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { WikiEmbedder(context.assets.open("wiki_embeddings.bin")) }
+                    .onSuccess {
+                        embedder = it
+                        Log.d("WikiTok", "embedder loaded (dim=${it.dim})")
+                    }
+                    .onFailure {
+                        Log.e("WikiTok", "embedder load failed", it)
+                        embedderFailed = true
+                    }
+                    .isSuccess
+            }
+        }
+    }
     private val cache = object : LinkedHashMap<String, FloatArray>(64, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>) =
             size > 512
@@ -43,7 +70,7 @@ class Recommender(private val context: Context) {
             profileLoaded = true
             profile = context.wikitokDataStore.data.first()[profileKey]
                 ?.split(',')?.map { it.toFloat() }?.toFloatArray()
-                ?.takeIf { it.size == ArticleEmbedder.DIM }
+                ?.takeIf { it.size == embedder?.dim }
         }
         return profile
     }
@@ -54,7 +81,10 @@ class Recommender(private val context: Context) {
     private suspend fun embedCached(article: Article): FloatArray {
         val key = "${article.lang}-${article.pageid}"
         cache[key]?.let { return it }
-        return embedder.embed(embeddingText(article)).also { cache[key] = it }
+        val e = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            embedder!!.embed(embeddingText(article), article.lang)
+        }
+        return e.also { cache[key] = it }
     }
 
     suspend fun onLiked(article: Article) = onEngaged(article, WEIGHT_LIKE, "like")
@@ -72,11 +102,11 @@ class Recommender(private val context: Context) {
      * strong signals dominate weak ones in proportion to their weights.
      */
     private suspend fun onEngaged(article: Article, weight: Float, signal: String) {
-        if (!embedder.ensureReady()) return
+        if (!ensureReady()) return
         runCatching {
             val e = embedCached(article)
             val p = loadProfile()
-            val updated = FloatArray(ArticleEmbedder.DIM) { i ->
+            val updated = FloatArray(embedder!!.dim) { i ->
                 (p?.get(i) ?: 0f) * DECAY + weight * e[i]
             }
             profile = updated
@@ -93,8 +123,8 @@ class Recommender(private val context: Context) {
      */
     suspend fun rank(candidates: List<Article>): List<Article> {
         if (candidates.size < 2) return candidates
+        if (!ensureReady()) return candidates
         loadProfile() ?: return candidates
-        if (!embedder.ensureReady()) return candidates
         return runCatching {
             val raw = profile ?: return candidates
             var pNorm = 0f

@@ -1,0 +1,23 @@
+import torch
+
+print("torch", torch.__version__, flush=True)
+d = "mps"
+emb = torch.nn.Embedding(65536, 64, device=d)
+torch.nn.init.uniform_(emb.weight, -0.01, 0.01)
+print("embedding ok", flush=True)
+out = torch.nn.Embedding(80000, 64, device=d)
+torch.nn.init.zeros_(out.weight)
+print("out ok", flush=True)
+w = torch.rand(80000, device=d)
+ids = torch.multinomial(w, 8192 * 5, replacement=True)
+print("multinomial ok", ids.shape, flush=True)
+vb = torch.randint(0, 65536, (80000, 40)).to(d)
+mask = torch.rand(80000, 40, 1).to(d)
+cen = torch.randint(0, 80000, (8192,)).to(d)
+e = (emb(vb[cen]) * mask[cen]).sum(dim=1)
+print("gather ok", e.shape, flush=True)
+neg = torch.bmm(out(ids.view(8192, 5)), e.unsqueeze(-1)).squeeze(-1)
+print("bmm ok", neg.shape, flush=True)
+loss = -(torch.nn.functional.logsigmoid((e * out(cen)).sum(-1)).mean())
+loss.backward()
+print("backward ok", flush=True)
