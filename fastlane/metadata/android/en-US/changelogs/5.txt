@@ -1,0 +1,3 @@
+Multiple Wikipedia languages simultaneously, interleaved in one feed.
+Digest notifications rotate through your languages.
+Properly signed, arm64-only store build (~35MB, down from 88MB).

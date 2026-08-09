@@ -4,3 +4,5 @@ local.properties
 .android/
 .kotlin/
 result
+release.keystore
+release.keystore.password

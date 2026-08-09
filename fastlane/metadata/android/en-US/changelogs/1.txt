@@ -1,0 +1,1 @@
+Initial release: endless vertical Wikipedia feed, saves, sharing, 10 languages.

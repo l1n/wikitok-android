@@ -1,0 +1,14 @@
+WikiTok turns Wikipedia into an endless, swipeable vertical feed — the TikTok interaction model pointed at the sum of human knowledge instead of dances.
+
+Features:
+
+• Endless feed of Wikipedia articles with full-bleed images; articles without an image get generated gradient art
+• On-device recommender: the more you like, read, and expand, the better the feed matches your interests. Embeddings are computed locally (MiniLM via ONNX Runtime); your profile is 384 floats in a local file. Nothing ever leaves your device — there is no server.
+• Mix multiple Wikipedia language editions in one feed, interleaved card by card
+• Articles with Wikimedia Commons videos autoplay instantly, muted and looping
+• Wikipedia's featured article of the day, badged in the feed
+• Twice-daily digest notification with an article picked for you
+• Tap to expand the extract, double-tap to like, long-press to share
+• Save articles for later; open the full article on Wikipedia any time
+
+Free and open source. Content: Wikipedia (CC BY-SA); this app is an unofficial reader and is not affiliated with the Wikimedia Foundation.

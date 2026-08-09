@@ -49,6 +49,12 @@ like, the smarter the feed gets.
   the selection. (Note: the embedding model is English-tuned, so cross-language
   personalization is approximate for non-Latin scripts.)
 
+## Installing
+
+- **Direct**: grab `app-release.apk` from the [latest release](https://github.com/l1n/wikitok-android/releases/latest) and sideload.
+- **[Obtainium](https://github.com/ImranR98/Obtainium)** (auto-updates from GitHub releases): add app → paste `https://github.com/l1n/wikitok-android` → done.
+- IzzyOnDroid / F-Droid: fastlane metadata is in-repo; submission pending.
+
 ## Building (nix)
 
 Everything — Android SDK, emulator, gradle, JDK — comes from the flake:

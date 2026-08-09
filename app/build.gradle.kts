@@ -14,16 +14,32 @@ android {
         applicationId = "com.novalinium.wikitok"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 5
+        versionName = "1.5.0"
+    }
+
+    // CI signs with the real key (from repo secrets); local builds without the
+    // env vars fall back to debug signing so `gradle assembleRelease` still works.
+    val keystorePath = System.getenv("WIKITOK_KEYSTORE")
+    if (keystorePath != null) {
+        signingConfigs.create("release") {
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("WIKITOK_KEYSTORE_PASSWORD")
+            keyAlias = "wikitok"
+            keyPassword = System.getenv("WIKITOK_KEYSTORE_PASSWORD")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Debug signing keeps the release APK directly installable; swap in a
-            // real keystore if this ever goes to a store.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystorePath != null) signingConfigs.getByName("release")
+            else signingConfigs.getByName("debug")
+            ndk {
+                // Store builds ship arm64 only; drops the APK from ~88MB to ~35MB
+                // (ONNX Runtime bundles native libs per ABI).
+                abiFilters += "arm64-v8a"
+            }
         }
     }
     compileOptions {
