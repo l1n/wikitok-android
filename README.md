@@ -38,6 +38,10 @@ like, the smarter the feed gets.
 - **Gestures**: tap to expand the full extract, double-tap to like (with the
   obligatory heart burst), long-press to share.
 - **Daily highlight**: Wikipedia's featured article of the day as a badged card.
+- **Digest notifications**: twice a day (WorkManager, 12h cadence), a
+  recommender-ranked pick — or the daily featured article before you have a
+  profile — as a big-picture notification; tapping opens the app on that
+  article. Test hook: `--ez notify_now true`.
 - **Save, share, open**: heart persists to DataStore, share sheet, open in browser.
 - **10 languages**: switching reloads the feed from that Wikipedia edition.
 

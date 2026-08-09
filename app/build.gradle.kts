@@ -48,6 +48,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")

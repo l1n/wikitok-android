@@ -1,8 +1,11 @@
 package com.novalinium.wikitok
 
 import android.app.Application
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +65,13 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
             loadDailyHighlight()
         }
         loadMore()
+        // Restore the persisted language choice (also read by the digest worker).
+        viewModelScope.launch {
+            val stored = getApplication<Application>().wikitokDataStore.data
+                .first()[stringPreferencesKey("language")]
+            LANGUAGES.find { it.code == stored && it != _language.value }
+                ?.let { setLanguage(it) }
+        }
     }
 
     fun ensureLoaded(currentIndex: Int) {
@@ -128,6 +138,11 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
     fun setLanguage(language: Language) {
         if (language == _language.value) return
         _language.value = language
+        viewModelScope.launch {
+            getApplication<Application>().wikitokDataStore.edit { prefs ->
+                prefs[stringPreferencesKey("language")] = language.code
+            }
+        }
         seen.clear()
         _feed.value = emptyList()
         _error.value = null

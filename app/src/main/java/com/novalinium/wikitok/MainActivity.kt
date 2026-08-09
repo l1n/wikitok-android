@@ -83,6 +83,29 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra("debug_titles")?.let {
             WikiTokViewModel.debugTitles = it.split('|').filter(String::isNotBlank)
         }
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+        // Twice-daily article digest; KEEP means re-launching never resets the cadence.
+        androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            DailyDigestWorker.WORK_NAME,
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            androidx.work.PeriodicWorkRequestBuilder<DailyDigestWorker>(
+                12, java.util.concurrent.TimeUnit.HOURS
+            ).setInitialDelay(12, java.util.concurrent.TimeUnit.HOURS).setConstraints(
+                androidx.work.Constraints.Builder()
+                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                    .build()
+            ).build(),
+        )
+        if (intent.getBooleanExtra("notify_now", false)) {
+            androidx.work.WorkManager.getInstance(this).enqueue(
+                androidx.work.OneTimeWorkRequestBuilder<DailyDigestWorker>().build()
+            )
+        }
         // Wikimedia rejects requests without an identifying User-Agent (HTTP 403)
         coil.Coil.setImageLoader(
             coil.ImageLoader.Builder(this)
