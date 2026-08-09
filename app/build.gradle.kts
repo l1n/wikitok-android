@@ -21,6 +21,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Debug signing keeps the release APK directly installable; swap in a
+            // real keystore if this ever goes to a store.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
