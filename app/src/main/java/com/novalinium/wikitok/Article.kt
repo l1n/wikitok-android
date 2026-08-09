@@ -17,6 +17,8 @@ data class Article(
     val thumbnail: Thumbnail? = null,
     val fullurl: String? = null,
     val lang: String = "en",
+    val isHighlight: Boolean = false,
+    val videoUrl: String? = null,
 ) {
     val url: String
         get() = fullurl ?: "https://$lang.wikipedia.org/?curid=$pageid"

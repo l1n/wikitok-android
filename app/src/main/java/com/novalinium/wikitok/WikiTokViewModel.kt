@@ -25,7 +25,13 @@ val LANGUAGES = listOf(
 )
 
 class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
+    companion object {
+        /** Set from the launch intent before the first composition (debug/testing hook). */
+        var debugTitles: List<String>? = null
+    }
+
     private val repo = SavedRepository(app)
+    private val recommender = Recommender(app)
 
     private val _feed = MutableStateFlow<List<Article>>(emptyList())
     val feed: StateFlow<List<Article>> = _feed
@@ -41,8 +47,20 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
 
     private val seen = mutableSetOf<Long>()
     private var loading = false
+    private var batchCount = 0
 
     init {
+        val debug = debugTitles
+        if (debug != null) {
+            viewModelScope.launch {
+                runCatching { WikipediaApi.fetchByTitles(_language.value.code, debug) }
+                    .onSuccess { batch ->
+                        _feed.value = batch.filter { seen.add(it.pageid) } + _feed.value
+                    }
+            }
+        } else {
+            loadDailyHighlight()
+        }
         loadMore()
     }
 
@@ -50,22 +68,59 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
         if (_feed.value.size - currentIndex < 5) loadMore()
     }
 
+    /** Prepend today's featured article, if this language edition publishes one. */
+    private fun loadDailyHighlight() {
+        val lang = _language.value.code
+        viewModelScope.launch {
+            val today = java.time.LocalDate.now()
+            runCatching {
+                WikipediaApi.fetchDailyFeatured(lang, today.year, today.monthValue, today.dayOfMonth)
+            }.getOrNull()?.let { tfa ->
+                if (_language.value.code == lang && seen.add(tfa.pageid)) {
+                    val current = _feed.value
+                    // Prepending after the user can see the feed shifts every pager
+                    // index (and the visible page); slot in as the next card instead.
+                    _feed.value = if (current.isEmpty()) listOf(tfa)
+                    else listOf(current.first(), tfa) + current.drop(1)
+                }
+            }
+        }
+    }
+
     fun loadMore() {
         if (loading) return
         loading = true
         val lang = _language.value.code
+        // Alternate random batches with morelike batches seeded from a saved article,
+        // so the feed drifts toward what the user hearts.
+        val seed = saved.value.filter { it.lang == lang && !it.isHighlight }
+            .randomOrNull()?.takeIf { batchCount % 2 == 1 }
+        batchCount++
         viewModelScope.launch {
-            runCatching { WikipediaApi.fetchRandomBatch(lang) }
-                .onSuccess { batch ->
-                    if (_language.value.code == lang) {
-                        _error.value = null
-                        val fresh = batch.filter { seen.add(it.pageid) }
-                        _feed.value = _feed.value + fresh
+            // A morelike batch can be fully deduped against `seen`; retry randomly
+            // (bounded) so pagination never stalls.
+            var useSeed = seed
+            for (attempt in 1..3) {
+                val result = runCatching {
+                    useSeed?.let { s ->
+                        WikipediaApi.fetchRelatedBatch(lang, s.title)
+                            .ifEmpty { WikipediaApi.fetchRandomBatch(lang) }
+                    } ?: WikipediaApi.fetchRandomBatch(lang)
+                }
+                val batch = result.getOrNull()
+                if (batch == null) {
+                    if (_feed.value.isEmpty()) {
+                        _error.value = result.exceptionOrNull()?.message ?: "Network error"
                     }
+                    break
                 }
-                .onFailure { e ->
-                    if (_feed.value.isEmpty()) _error.value = e.message ?: "Network error"
-                }
+                if (_language.value.code != lang) break
+                _error.value = null
+                val fresh = recommender.rank(batch.filter { seen.add(it.pageid) })
+                _feed.value = _feed.value + fresh
+                if (fresh.isNotEmpty()) break
+                useSeed = null
+            }
             loading = false
         }
     }
@@ -76,11 +131,18 @@ class WikiTokViewModel(app: Application) : AndroidViewModel(app) {
         seen.clear()
         _feed.value = emptyList()
         _error.value = null
+        batchCount = 0
+        loadDailyHighlight()
         loadMore()
     }
 
     fun toggleSaved(article: Article) {
-        viewModelScope.launch { repo.toggle(article) }
+        val wasLiked = isSaved(article, saved.value)
+        viewModelScope.launch {
+            repo.toggle(article)
+            // Only new likes teach the recommender; unliking doesn't unlearn.
+            if (!wasLiked) recommender.onLiked(article)
+        }
     }
 
     fun isSaved(article: Article, savedList: List<Article>): Boolean =

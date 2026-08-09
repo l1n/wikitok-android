@@ -9,21 +9,21 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
-private val Context.dataStore by preferencesDataStore(name = "wikitok")
+internal val Context.wikitokDataStore by preferencesDataStore(name = "wikitok")
 
 class SavedRepository(private val context: Context) {
     private val key = stringPreferencesKey("saved_articles")
     private val json = Json { ignoreUnknownKeys = true }
     private val listSerializer = ListSerializer(Article.serializer())
 
-    val saved: Flow<List<Article>> = context.dataStore.data.map { prefs ->
+    val saved: Flow<List<Article>> = context.wikitokDataStore.data.map { prefs ->
         prefs[key]?.let {
             runCatching { json.decodeFromString(listSerializer, it) }.getOrDefault(emptyList())
         } ?: emptyList()
     }
 
     suspend fun toggle(article: Article) {
-        context.dataStore.edit { prefs ->
+        context.wikitokDataStore.edit { prefs ->
             val current = prefs[key]?.let {
                 runCatching { json.decodeFromString(listSerializer, it) }.getOrDefault(emptyList())
             } ?: emptyList()

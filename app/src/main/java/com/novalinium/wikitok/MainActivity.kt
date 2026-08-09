@@ -7,8 +7,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,6 +80,9 @@ import coil.compose.AsyncImage
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        intent.getStringExtra("debug_titles")?.let {
+            WikiTokViewModel.debugTitles = it.split('|').filter(String::isNotBlank)
+        }
         // Wikimedia rejects requests without an identifying User-Agent (HTTP 403)
         coil.Coil.setImageLoader(
             coil.ImageLoader.Builder(this)
@@ -146,11 +156,13 @@ fun FeedScreen(vm: WikiTokViewModel, onOpenSaved: () -> Unit) {
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
                     beyondViewportPageCount = 1,
+                    key = { feed[it].let { a -> "${a.lang}-${a.pageid}" } },
                 ) { page ->
                     val article = feed[page]
                     ArticleCard(
                         article = article,
                         isSaved = vm.isSaved(article, saved),
+                        isActive = pagerState.currentPage == page,
                         onToggleSaved = { vm.toggleSaved(article) },
                     )
                 }
@@ -219,10 +231,63 @@ fun LanguagePicker(current: Language, onSelect: (Language) -> Unit) {
     }
 }
 
+// Deterministic gradient art for articles without a lead image.
+private val PLACEHOLDER_GRADIENTS = listOf(
+    listOf(Color(0xFF355C7D), Color(0xFF6C5B7B), Color(0xFFC06C84)),
+    listOf(Color(0xFF2C3E50), Color(0xFF4CA1AF)),
+    listOf(Color(0xFF134E5E), Color(0xFF71B280)),
+    listOf(Color(0xFF41295A), Color(0xFF2F0743)),
+    listOf(Color(0xFF1E3C72), Color(0xFF2A5298)),
+    listOf(Color(0xFF614385), Color(0xFF516395)),
+    listOf(Color(0xFF3A1C71), Color(0xFFD76D77), Color(0xFFFFAF7B)),
+    listOf(Color(0xFF232526), Color(0xFF414345)),
+)
+
 @Composable
-fun ArticleCard(article: Article, isSaved: Boolean, onToggleSaved: () -> Unit) {
+fun ArticleCard(
+    article: Article,
+    isSaved: Boolean,
+    onToggleSaved: () -> Unit,
+    isActive: Boolean = false,
+) {
     val context = LocalContext.current
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101318))) {
+    var expanded by remember(article.pageid) { mutableStateOf(false) }
+    var burst by remember { mutableStateOf(0) }
+    val burstScale = remember { androidx.compose.animation.core.Animatable(0f) }
+    val burstAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(burst) {
+        if (burst > 0) {
+            burstAlpha.snapTo(1f)
+            burstScale.snapTo(0.4f)
+            burstScale.animateTo(
+                1.1f,
+                androidx.compose.animation.core.spring(dampingRatio = 0.45f, stiffness = 900f),
+            )
+            burstAlpha.animateTo(0f, androidx.compose.animation.core.tween(350))
+        }
+    }
+    val share = {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "${article.title}\n${article.url}")
+        }
+        context.startActivity(Intent.createChooser(send, "Share article"))
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF101318))
+            .pointerInput(article.pageid) {
+                detectTapGestures(
+                    onTap = { expanded = !expanded },
+                    onDoubleTap = {
+                        if (!isSaved) onToggleSaved()
+                        burst++
+                    },
+                    onLongPress = { share() },
+                )
+            },
+    ) {
         if (article.thumbnail != null) {
             AsyncImage(
                 model = article.thumbnail.source,
@@ -239,7 +304,73 @@ fun ArticleCard(article: Article, isSaved: Boolean, onToggleSaved: () -> Unit) {
                     }
                 },
             )
+        } else {
+            val palette = PLACEHOLDER_GRADIENTS[
+                kotlin.math.abs(article.title.hashCode()) % PLACEHOLDER_GRADIENTS.size
+            ]
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Brush.linearGradient(palette)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    article.title.firstOrNull()?.uppercase() ?: "W",
+                    color = Color.White.copy(alpha = 0.14f),
+                    fontSize = 280.sp,
+                    fontWeight = FontWeight.Black,
+                )
+            }
         }
+        // Videos take over the card the moment it becomes the current page.
+        if (article.videoUrl != null && isActive) {
+            val exoPlayer = remember(article.videoUrl) {
+                // Wikimedia 429s HttpURLConnection's client fingerprint regardless of
+                // UA; OkHttp (which Coil also uses) gets through fine.
+                val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(
+                    okhttp3.OkHttpClient()
+                ).setUserAgent("WikiTok-Android/1.0 (personal project)")
+                androidx.media3.exoplayer.ExoPlayer.Builder(context)
+                    .setMediaSourceFactory(
+                        androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
+                            androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
+                        )
+                    )
+                    .build().apply {
+                    addListener(object : androidx.media3.common.Player.Listener {
+                        override fun onRenderedFirstFrame() {
+                            android.util.Log.d("WikiTok", "video first frame: ${article.title}")
+                        }
+                        override fun onPlaybackStateChanged(state: Int) {
+                            android.util.Log.d("WikiTok", "video state=$state: ${article.title}")
+                        }
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            android.util.Log.e("WikiTok", "video error: ${article.title}", error)
+                        }
+                    })
+                    setMediaItem(androidx.media3.common.MediaItem.fromUri(article.videoUrl))
+                    repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
+                    volume = 0f
+                    playWhenReady = true
+                    prepare()
+                }
+            }
+            androidx.compose.runtime.DisposableEffect(article.videoUrl) {
+                onDispose { exoPlayer.release() }
+            }
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { ctx ->
+                    androidx.media3.ui.PlayerView(ctx).apply {
+                        player = exoPlayer
+                        useController = false
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
         // Scrim so text is readable over any image
         Box(
             modifier = Modifier
@@ -270,13 +401,7 @@ fun ArticleCard(article: Article, isSaved: Boolean, onToggleSaved: () -> Unit) {
                     modifier = Modifier.size(32.dp),
                 )
             }
-            IconButton(onClick = {
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, "${article.title}\n${article.url}")
-                }
-                context.startActivity(Intent.createChooser(send, "Share article"))
-            }) {
+            IconButton(onClick = { share() }) {
                 Icon(Icons.Filled.Share, contentDescription = "Share", tint = Color.White, modifier = Modifier.size(28.dp))
             }
             IconButton(onClick = {
@@ -286,13 +411,27 @@ fun ArticleCard(article: Article, isSaved: Boolean, onToggleSaved: () -> Unit) {
             }
         }
 
-        // Bottom text block
+        // Bottom text block — tap toggles between preview and full extract
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(start = 16.dp, end = 72.dp, bottom = 24.dp),
+                .padding(start = 16.dp, end = 72.dp, bottom = 24.dp)
+                .animateContentSize(),
         ) {
+            if (article.isHighlight) {
+                Text(
+                    "★ Today's featured article",
+                    color = Color(0xFFFFD75E),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             Text(
                 article.title,
                 color = Color.White,
@@ -301,14 +440,42 @@ fun ArticleCard(article: Article, isSaved: Boolean, onToggleSaved: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             if (article.extract.isNotBlank()) {
-                Text(
-                    article.extract,
-                    color = Color.White.copy(alpha = 0.9f),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 7,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (expanded) {
+                    Text(
+                        article.extract,
+                        color = Color.White.copy(alpha = 0.92f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                } else {
+                    Text(
+                        article.extract,
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 7,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
+        }
+
+        // Double-tap heart burst
+        if (burstAlpha.value > 0f) {
+            Icon(
+                Icons.Filled.Favorite,
+                contentDescription = null,
+                tint = Color(0xFFFF3B5C),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(140.dp)
+                    .graphicsLayer {
+                        scaleX = burstScale.value
+                        scaleY = burstScale.value
+                        alpha = burstAlpha.value
+                    },
+            )
         }
     }
 }
