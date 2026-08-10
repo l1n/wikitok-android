@@ -92,8 +92,14 @@ TEST_TEXTS = [
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--langs", required=True)
+    ap.add_argument("--rotations", default="models/rotations.npz")
     args = ap.parse_args()
     langs = args.langs.split(",")
+    rotations = {}
+    if Path(args.rotations).exists():
+        r = np.load(args.rotations)
+        rotations = {k: r[k].astype(np.float32) for k in r.files}
+        print(f"rotations: {sorted(rotations)}")
 
     m = np.load("models/joint.npz")
     table = m["table"].astype(np.float32)
@@ -123,7 +129,7 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("wb") as f:
         f.write(b"WKEM")
-        f.write(struct.pack(">IIIII", 3, dim, buckets, PQ_SUB, PQ_K))
+        f.write(struct.pack(">IIIII", 4, dim, buckets, PQ_SUB, PQ_K))
         f.write(mean.astype(">f4").tobytes())
         f.write(codebooks.astype(">f4").tobytes())
         f.write(norms.astype(">f4").tobytes())
@@ -141,10 +147,17 @@ def main() -> None:
                 f.write(struct.pack(">H", len(tb)))
                 f.write(tb)
                 f.write(struct.pack(">I", min(cnt, 0xFFFFFFFF)))
+        f.write(struct.pack(">I", len(rotations)))
+        for lang, w in sorted(rotations.items()):
+            code = lang.encode("utf-8")
+            f.write(struct.pack(">B", len(code)))
+            f.write(code)
+            f.write(w.astype(">f4").tobytes())
     print(f"asset: {out} ({out.stat().st_size/1e6:.1f}MB)")
 
     # Parity vectors computed against the QUANTIZED table
     emb = RefEmbedder(dq, buckets, freqs, totals, mean=mean)
+    emb.rotations = rotations
     vectors = [
         {"lang": lang, "text": text, "vector": [round(float(x), 6) for x in emb.embed(text, lang)]}
         for lang, text in TEST_TEXTS

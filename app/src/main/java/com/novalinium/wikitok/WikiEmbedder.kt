@@ -22,12 +22,13 @@ class WikiEmbedder(stream: InputStream) {
     private val codes: ByteArray      // [buckets * nSub]
     private val freqs: Map<String, Map<String, Long>>
     private val totals: Map<String, Long>
+    private val rotations: Map<String, FloatArray> // per-lang Procrustes into en space
 
     init {
         DataInputStream(stream.buffered(1 shl 20)).use { d ->
             val magic = ByteArray(4).also { d.readFully(it) }
             require(String(magic) == "WKEM") { "bad magic" }
-            require(d.readInt() == 3) { "unsupported version" }
+            require(d.readInt() == 4) { "unsupported version" }
             dim = d.readInt()
             buckets = d.readInt()
             nSub = d.readInt()
@@ -55,6 +56,14 @@ class WikiEmbedder(stream: InputStream) {
             }
             freqs = f
             totals = t
+            val rotCount = d.readInt()
+            val r = HashMap<String, FloatArray>(rotCount)
+            repeat(rotCount) {
+                val code = ByteArray(d.readUnsignedByte()).also { b -> d.readFully(b) }
+                    .toString(Charsets.UTF_8)
+                r[code] = FloatArray(dim * dim) { d.readFloat() }
+            }
+            rotations = r
         }
     }
 
@@ -186,6 +195,15 @@ class WikiEmbedder(stream: InputStream) {
         }
         cnorm = maxOf(sqrt(cnorm), 1e-9)
         for (i in 0 until dim) out[i] = (acc[i] / cnorm).toFloat()
-        return out
+        // Rotate into the shared (English) space if this language has a map
+        val w = rotations[lang] ?: return out
+        val rotated = FloatArray(dim)
+        for (i in 0 until dim) {
+            val vi = out[i]
+            if (vi == 0f) continue
+            val row = i * dim
+            for (j in 0 until dim) rotated[j] += vi * w[row + j]
+        }
+        return rotated
     }
 }

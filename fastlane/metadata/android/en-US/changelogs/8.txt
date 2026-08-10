@@ -1,0 +1,1 @@
+Cross-language recommendations dramatically improved: per-language rotation maps (fit on Wikipedia interlanguage links) align Russian, Japanese, and Chinese with the shared embedding space.

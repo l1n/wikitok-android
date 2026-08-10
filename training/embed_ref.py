@@ -20,6 +20,7 @@ class RefEmbedder:
         self.freqs = freqs
         self.totals = totals
         self.mean = mean  # common-component vector subtracted post-normalization
+        self.rotations: dict[str, np.ndarray] = {}  # per-lang Procrustes into en space
 
     def token_vec(self, token: str) -> np.ndarray:
         ids = token_buckets(token, self.buckets)
@@ -44,6 +45,9 @@ class RefEmbedder:
             v = v - self.mean
             norm = np.linalg.norm(v)
             v = v / max(norm, 1e-9)
+        w = self.rotations.get(lang)
+        if w is not None:
+            v = v @ w
         return v.astype(np.float32)
 
 
@@ -82,7 +86,7 @@ def load_asset(path: str):
     assert data[:4] == b"WKEM"
     off = 4
     version, dim, buckets, n_sub, k = rd(">IIIII")
-    assert version == 3, version
+    assert version == 4, version
     ds = dim // n_sub
     mean = np.frombuffer(data, ">f4", dim, off).astype(np.float32); off += 4 * dim
     codebooks = np.frombuffer(data, ">f4", n_sub * k * ds, off).astype(np.float32).reshape(n_sub, k, ds); off += 4 * n_sub * k * ds
@@ -105,7 +109,14 @@ def load_asset(path: str):
             tok = data[off : off + tl].decode("utf-8"); off += tl
             m[tok] = rd(">I")
         freqs[code] = m
-    return table, buckets, freqs, totals, mean
+    rotations = {}
+    rot_count = rd(">I")
+    for _ in range(rot_count):
+        (n,) = struct.unpack_from(">B", data, off); off += 1
+        code = data[off : off + n].decode("utf-8"); off += n
+        rotations[code] = np.frombuffer(data, ">f4", dim * dim, off).astype(np.float32).reshape(dim, dim)
+        off += 4 * dim * dim
+    return table, buckets, freqs, totals, mean, rotations
 
 
 def load_freqs(langs: list[str]) -> tuple[dict, dict]:

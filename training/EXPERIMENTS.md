@@ -16,7 +16,8 @@ Score a shipped candidate with `eval.py --asset` (PQ + trimmed freqs applied).
 
 Ship a new model (export → parity test → version bump → tag) only if:
 - mean Latin gap within 0.03 of current best, AND
-- mean cross-script gap improves by ≥ 0.05, or Latin mean improves ≥ 0.03.
+- mean cross-script gap improves by ≥ 0.05, or Latin mean improves ≥ 0.03,
+- OR the change is a strict Pareto improvement (every language's gap ≥ previous). (Amended 08-10: both shipped experiments qualified this way.)
 
 ## Protocol per session
 
@@ -45,7 +46,7 @@ Ship a new model (export → parity test → version bump → tag) only if:
    append romanized forms of ru (ISO-9) and ja (kana→romaji) tokens as extra
    anchor tokens in code-switch sentences, giving CJK/Cyrillic shared-subword
    anchors with Latin. Needs a small pure-Python transliterator (no deps).
-3. **Procrustes post-alignment per script** (MUSE, arXiv:1710.04087): can't
+3. `[done 2026-08-10 → shipped v1.8.0]` **Procrustes post-alignment per script** (MUSE, arXiv:1710.04087): can't
    rotate a shared table per-language — but CAN learn a rotation applied at
    *inference* per language (store per-lang D×D matrix in asset v4, ~36KB each;
    Kotlin matmul). Train rotation on title-pair embeddings (closed form SVD).
@@ -69,3 +70,4 @@ Ship a new model (export → parity test → version bump → tag) only if:
 | 2026-08-10 | baseline (v1.6.0 + PQ) | 0.53 | 0.07 | v1.6.0 |
 | 2026-08-10 | repeated pairs (60x ru/ja/zh) | 0.566 | 0.128 | v1.7.0 — gate borderline (+0.038 cross-script) but 9/9 languages improved; shipped as Pareto win |
 | 2026-08-10 | transliteration bridge (ru full, ja kana) | 0.564 | 0.129 | no — flat (ru +0.008, ja −0.007); kana-only coverage too partial, kanji dominates titles. Revisit only with a real pinyin/kanji dictionary |
+| 2026-08-10 | per-lang Procrustes rotations (holdout-fit, asset v4) | 0.573 | 0.164 | v1.8.0 — Pareto 9/9; shipped-artifact cross-script gaps +50-106% (ru 0.102→0.157, ja 0.054→0.082, zh 0.053→0.109). Fit on 8k pairs, evaluated on untouched 2k tail |

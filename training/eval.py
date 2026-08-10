@@ -19,15 +19,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--langs", required=True)
     ap.add_argument("--sample", type=int, default=2000)
-    ap.add_argument("--asset", default=None, help="score an exported v3 asset instead of models/joint.npz")
+    ap.add_argument("--asset", default=None, help="score an exported asset instead of models/joint.npz")
+    ap.add_argument("--rotations", default=None, help="apply models/rotations.npz at inference")
     args = ap.parse_args()
     langs = args.langs.split(",")
 
     if args.asset:
         from embed_ref import load_asset
-        table, buckets, freqs, totals, mean = load_asset(args.asset)
+        table, buckets, freqs, totals, mean, rotations = load_asset(args.asset)
         emb = RefEmbedder(table, buckets, freqs, totals, mean=mean)
-        print(f"asset loaded: {args.asset}", file=sys.stderr)
+        emb.rotations = rotations
+        print(f"asset loaded: {args.asset} (rotations: {sorted(rotations)})", file=sys.stderr)
     else:
         m = np.load("models/joint.npz")
         table, buckets = m["table"], int(m["buckets"])
@@ -35,6 +37,10 @@ def main() -> None:
         emb = RefEmbedder(table, buckets, freqs, totals)
         emb.mean = compute_mean(emb, langs)
         print("common-component mean computed", file=sys.stderr)
+    if args.rotations:
+        rots = np.load(args.rotations)
+        emb.rotations = {k: rots[k] for k in rots.files}
+        print(f"rotations applied: {sorted(emb.rotations)}", file=sys.stderr)
 
     rng = np.random.default_rng(7)
     for lang in langs:
