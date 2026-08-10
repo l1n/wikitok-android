@@ -41,7 +41,7 @@ Ship a new model (export → parity test → version bump → tag) only if:
 
 1. `[done 2026-08-10 → shipped v1.7.0]` **Repeated pairs**: PAIR_REPEAT 60 for ru/ja/zh
    (was 10). Cheapest possible cross-script boost; running now.
-2. **Transliteration bridge** (arXiv:2406.19759 "Breaking the Script Barrier"):
+2. `[running 2026-08-10]` **Transliteration bridge** (arXiv:2406.19759 "Breaking the Script Barrier"):
    append romanized forms of ru (ISO-9) and ja (kana→romaji) tokens as extra
    anchor tokens in code-switch sentences, giving CJK/Cyrillic shared-subword
    anchors with Latin. Needs a small pure-Python transliterator (no deps).

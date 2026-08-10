@@ -27,6 +27,7 @@ import numpy as np
 import torch
 
 from common import MAX_NGRAMS, token_buckets, tokenize
+from translit import translit_tokens
 
 SUBSAMPLE_T = 1e-4
 WINDOW = 5
@@ -64,8 +65,13 @@ def load_sentences(langs):
                 a, b = tokenize(parts[0]), tokenize(parts[1])
                 if not a or not b or len(a) > 12 or len(b) > 12:
                     continue
+                # Romanized pivot tokens bridge scripts (arXiv:2406.19759):
+                # they share subwords with Latin cognates/loanwords on one side
+                # and co-occur with the original script on the other.
+                bridge = translit_tokens(lang, a)
                 for _ in range(PAIR_REPEAT.get(lang, PAIR_REPEAT_DEFAULT)):
-                    sentences.append(a + b if random.random() < 0.5 else b + a)
+                    parts = [a, bridge, [*b]] if random.random() < 0.5 else [[*b], bridge, a]
+                    sentences.append([t for p in parts for t in p if t])
                 n += 1
             print(f"{lang}: {n} title pairs for code-switching", file=sys.stderr)
     random.shuffle(sentences)
