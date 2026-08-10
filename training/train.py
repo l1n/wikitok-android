@@ -32,7 +32,11 @@ SUBSAMPLE_T = 1e-4
 WINDOW = 5
 NEGATIVES = 5
 MIN_COUNT = 5
-PAIR_REPEAT = 10
+# Cross-script languages get their code-switch pairs repeated much harder:
+# Latin languages align through shared tokens; Cyrillic/CJK have no such
+# anchors, so the title pairs carry all the supervision.
+PAIR_REPEAT = {"ru": 60, "ja": 60, "zh": 60}
+PAIR_REPEAT_DEFAULT = 10
 SHARD_PAIRS = 5_000_000
 REFRESH = 100  # steps between preconditioner refreshes
 
@@ -60,7 +64,7 @@ def load_sentences(langs):
                 a, b = tokenize(parts[0]), tokenize(parts[1])
                 if not a or not b or len(a) > 12 or len(b) > 12:
                     continue
-                for _ in range(PAIR_REPEAT):
+                for _ in range(PAIR_REPEAT.get(lang, PAIR_REPEAT_DEFAULT)):
                     sentences.append(a + b if random.random() < 0.5 else b + a)
                 n += 1
             print(f"{lang}: {n} title pairs for code-switching", file=sys.stderr)

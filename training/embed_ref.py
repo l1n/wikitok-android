@@ -64,6 +64,50 @@ def compute_mean(embedder: "RefEmbedder", langs: list[str], per_lang: int = 5000
     return np.stack(vecs).mean(axis=0).astype(np.float32)
 
 
+def load_asset(path: str):
+    """Parse the v3 app asset back into (RefEmbedder-ready pieces) — used by
+    eval.py --asset to score exactly what ships."""
+    import struct
+
+    with open(path, "rb") as f:
+        data = f.read()
+    off = 0
+
+    def rd(fmt):
+        nonlocal off
+        vals = struct.unpack_from(fmt, data, off)
+        off += struct.calcsize(fmt)
+        return vals if len(vals) > 1 else vals[0]
+
+    assert data[:4] == b"WKEM"
+    off = 4
+    version, dim, buckets, n_sub, k = rd(">IIIII")
+    assert version == 3, version
+    ds = dim // n_sub
+    mean = np.frombuffer(data, ">f4", dim, off).astype(np.float32); off += 4 * dim
+    codebooks = np.frombuffer(data, ">f4", n_sub * k * ds, off).astype(np.float32).reshape(n_sub, k, ds); off += 4 * n_sub * k * ds
+    norms = np.frombuffer(data, ">f4", buckets, off).astype(np.float32); off += 4 * buckets
+    codes = np.frombuffer(data, np.uint8, buckets * n_sub, off).reshape(buckets, n_sub); off += buckets * n_sub
+    table = np.zeros((buckets, dim), dtype=np.float32)
+    for s in range(n_sub):
+        table[:, s * ds : (s + 1) * ds] = codebooks[s][codes[:, s]]
+    table *= norms[:, None]
+    lang_count = rd(">I")
+    freqs, totals = {}, {}
+    for _ in range(lang_count):
+        (n,) = struct.unpack_from(">B", data, off); off += 1
+        code = data[off : off + n].decode("utf-8"); off += n
+        totals[code] = rd(">Q")
+        cnt = rd(">I")
+        m = {}
+        for _ in range(cnt):
+            (tl,) = struct.unpack_from(">H", data, off); off += 2
+            tok = data[off : off + tl].decode("utf-8"); off += tl
+            m[tok] = rd(">I")
+        freqs[code] = m
+    return table, buckets, freqs, totals, mean
+
+
 def load_freqs(langs: list[str]) -> tuple[dict, dict]:
     freqs: dict[str, dict[str, int]] = {}
     totals: dict[str, int] = {}

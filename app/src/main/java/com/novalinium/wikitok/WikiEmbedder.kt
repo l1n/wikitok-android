@@ -13,9 +13,13 @@ import kotlin.math.sqrt
 class WikiEmbedder(stream: InputStream) {
     val dim: Int
     private val buckets: Int
+    private val nSub: Int
+    private val subDim: Int
+    private val pqK: Int
     private val mean: FloatArray
-    private val scales: FloatArray
-    private val table: ByteArray
+    private val codebooks: FloatArray // [nSub * k * subDim]
+    private val scales: FloatArray    // per-bucket vector norm
+    private val codes: ByteArray      // [buckets * nSub]
     private val freqs: Map<String, Map<String, Long>>
     private val totals: Map<String, Long>
 
@@ -23,12 +27,16 @@ class WikiEmbedder(stream: InputStream) {
         DataInputStream(stream.buffered(1 shl 20)).use { d ->
             val magic = ByteArray(4).also { d.readFully(it) }
             require(String(magic) == "WKEM") { "bad magic" }
-            require(d.readInt() == 2) { "unsupported version" }
+            require(d.readInt() == 3) { "unsupported version" }
             dim = d.readInt()
             buckets = d.readInt()
+            nSub = d.readInt()
+            pqK = d.readInt()
+            subDim = dim / nSub
             mean = FloatArray(dim) { d.readFloat() }
+            codebooks = FloatArray(nSub * pqK * subDim) { d.readFloat() }
             scales = FloatArray(buckets) { d.readFloat() }
-            table = ByteArray(buckets * dim).also { d.readFully(it) }
+            codes = ByteArray(buckets * nSub).also { d.readFully(it) }
             val langCount = d.readInt()
             val f = HashMap<String, Map<String, Long>>(langCount)
             val t = HashMap<String, Long>(langCount)
@@ -41,7 +49,7 @@ class WikiEmbedder(stream: InputStream) {
                 repeat(n) {
                     val tok = ByteArray(d.readUnsignedShort()).also { b -> d.readFully(b) }
                         .toString(Charsets.UTF_8)
-                    m[tok] = d.readLong()
+                    m[tok] = d.readInt().toLong()
                 }
                 f[code] = m
             }
@@ -136,8 +144,14 @@ class WikiEmbedder(stream: InputStream) {
         for (g in grams) {
             val b = bucketOf(g)
             val scale = scales[b]
-            val off = b * dim
-            for (i in 0 until dim) tokenAcc[i] += table[off + i] * scale
+            // PQ decode: each subvector is a codebook centroid, scaled by norm
+            for (s in 0 until nSub) {
+                val cb = (s * pqK + (codes[b * nSub + s].toInt() and 0xFF)) * subDim
+                val off = s * subDim
+                for (i in 0 until subDim) {
+                    tokenAcc[off + i] += codebooks[cb + i] * scale
+                }
+            }
         }
         val inv = weight / grams.size
         for (i in 0 until dim) acc[i] += tokenAcc[i] * inv
