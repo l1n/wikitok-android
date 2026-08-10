@@ -1,0 +1,1 @@
+Recommender now uses our own multilingual embedding model, trained on Wikipedia dumps (source + weights open, reproducible). No ML runtime, no model download — everything ships in the APK and runs in pure Kotlin.

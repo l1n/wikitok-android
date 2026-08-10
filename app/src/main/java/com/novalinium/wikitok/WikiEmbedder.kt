@@ -2,7 +2,6 @@ package com.novalinium.wikitok
 
 import java.io.DataInputStream
 import java.io.InputStream
-import java.util.regex.Pattern
 import kotlin.math.sqrt
 
 /**
@@ -60,15 +59,45 @@ class WikiEmbedder(stream: InputStream) {
         private const val FNV_OFFSET = -0x340d631b7bdddcdbL // 0xCBF29CE484222325
         private const val FNV_PRIME = 0x100000001B3L
 
-        // Hiragana/katakana, CJK ext A, CJK unified, CJK compat — as in common.py
-        private val CJK = Pattern.compile("([぀-ヿ㐀-䶿一-鿿豈-﫿])")
-        private val TOKEN = Pattern.compile("[^\\W_]+", Pattern.UNICODE_CHARACTER_CLASS)
+        // Android's regex rejects UNICODE_CHARACTER_CLASS, so tokenization is an
+        // explicit code-point walk matching Python's \w (isalnum = L* + Nd/Nl/No).
+        // CJK ranges as in common.py: kana, CJK ext A, CJK unified, CJK compat.
+        private fun isCjk(cp: Int) =
+            cp in 0x3040..0x30FF || cp in 0x3400..0x4DBF ||
+                cp in 0x4E00..0x9FFF || cp in 0xF900..0xFAFF
+
+        private fun isAlnum(cp: Int): Boolean {
+            if (Character.isLetter(cp)) return true
+            val t = Character.getType(cp)
+            return t == Character.DECIMAL_DIGIT_NUMBER.toInt() ||
+                t == Character.LETTER_NUMBER.toInt() ||
+                t == Character.OTHER_NUMBER.toInt()
+        }
 
         fun tokenize(text: String): List<String> {
-            val isolated = CJK.matcher(text.lowercase()).replaceAll(" $1 ")
-            val m = TOKEN.matcher(isolated)
+            val lower = text.lowercase()
             val out = ArrayList<String>()
-            while (m.find()) out.add(m.group())
+            val sb = StringBuilder()
+            var i = 0
+            while (i < lower.length) {
+                val cp = lower.codePointAt(i)
+                when {
+                    isCjk(cp) -> {
+                        if (sb.isNotEmpty()) {
+                            out.add(sb.toString())
+                            sb.setLength(0)
+                        }
+                        out.add(String(Character.toChars(cp)))
+                    }
+                    isAlnum(cp) -> sb.appendCodePoint(cp)
+                    else -> if (sb.isNotEmpty()) {
+                        out.add(sb.toString())
+                        sb.setLength(0)
+                    }
+                }
+                i += Character.charCount(cp)
+            }
+            if (sb.isNotEmpty()) out.add(sb.toString())
             return out
         }
 

@@ -1,19 +1,22 @@
 """Joint multilingual skipgram-negative-sampling over a shared hash-bucket
-subword table (fastText-style input, word-level output vocab).
+subword table — manual sparse backward + one-sided Shampoo, tuned for MPS.
 
-Cross-lingual alignment comes from (a) tokens shared verbatim across wikis
-(names, numbers, loanwords) and (b) code-switched sentences synthesized from
-interlanguage title pairs (pairs/{lang}.tsv).
+Two phases:
+  1. Pair generation: multiprocessing over sentence shards → int32 .npy pair
+     shards in models/pairs_cache/ (resumable, GPU never starves).
+  2. Training: manual SGNS forward/backward (no autograd, no dense-optimizer
+     sweep over the 44M-param tables). Updates touch only the rows a batch
+     used, preconditioned by the dim-side Shampoo factor (R = Σ GᵀG, apply
+     G·R^{-1/2}), inverse root refreshed on CPU every REFRESH steps.
 
 Usage:
   python train.py --langs en,es,ja --dim 64 --buckets 65536 --max-pairs 20000000
-Output:
-  models/joint.npz            bucket embedding table (float32)
-  models/freq_{lang}.tsv      per-language token counts for SIF (top 60k)
+Output: models/joint.npz + models/freq_{lang}.tsv  (same as before)
 """
 
 import argparse
 import math
+import multiprocessing as mp
 import random
 import sys
 import time
@@ -29,28 +32,24 @@ SUBSAMPLE_T = 1e-4
 WINDOW = 5
 NEGATIVES = 5
 MIN_COUNT = 5
-PAIR_REPEAT = 10  # each title pair becomes this many code-switch sentences
+PAIR_REPEAT = 10
+SHARD_PAIRS = 5_000_000
+REFRESH = 100  # steps between preconditioner refreshes
 
 
-def load_sentences(langs: list[str]) -> tuple[list[list[str]], dict[str, Counter], dict[str, int]]:
-    sentences: list[list[str]] = []
-    lang_counts: dict[str, Counter] = {}
-    lang_totals: dict[str, int] = {}
+def load_sentences(langs):
+    sentences, lang_counts, lang_totals = [], {}, {}
     for lang in langs:
-        counts: Counter = Counter()
-        total = 0
-        path = Path(f"corpus/{lang}.txt")
-        for line in path.open(encoding="utf-8"):
+        counts, total = Counter(), 0
+        for line in Path(f"corpus/{lang}.txt").open(encoding="utf-8"):
             toks = tokenize(line)
             if len(toks) < 5:
                 continue
             sentences.append(toks)
             counts.update(toks)
             total += len(toks)
-        lang_counts[lang] = counts
-        lang_totals[lang] = total
+        lang_counts[lang], lang_totals[lang] = counts, total
         print(f"{lang}: {total/1e6:.1f}M tokens", file=sys.stderr)
-        # Code-switched sentences from title pairs
         pair_path = Path(f"pairs/{lang}.tsv")
         if lang != "en" and pair_path.exists():
             n = 0
@@ -59,7 +58,6 @@ def load_sentences(langs: list[str]) -> tuple[list[list[str]], dict[str, Counter
                 if len(parts) != 2:
                     continue
                 a, b = tokenize(parts[0]), tokenize(parts[1])
-                # CJK titles tokenize to one char per token — allow longer titles
                 if not a or not b or len(a) > 12 or len(b) > 12:
                     continue
                 for _ in range(PAIR_REPEAT):
@@ -70,113 +68,198 @@ def load_sentences(langs: list[str]) -> tuple[list[list[str]], dict[str, Counter
     return sentences, lang_counts, lang_totals
 
 
+_G = {}
+
+
+def _init_worker(sentences, vid, keep):
+    _G["sentences"], _G["vid"], _G["keep"] = sentences, vid, keep
+    random.seed(mp.current_process().pid)
+
+
+def _gen_shard(args):
+    lo, hi, out_path = args
+    vid, keep = _G["vid"], _G["keep"]
+    centers, ctxs = [], []
+    for toks in _G["sentences"][lo:hi]:
+        ids = [vid[t] for t in toks if t in vid]
+        ids = [i for i in ids if random.random() < keep[i]]
+        n = len(ids)
+        for j, c in enumerate(ids):
+            w = random.randint(1, WINDOW)
+            for k in range(max(0, j - w), min(n, j + w + 1)):
+                if k != j:
+                    centers.append(c)
+                    ctxs.append(ids[k])
+    arr = np.stack([np.array(centers, dtype=np.int32), np.array(ctxs, dtype=np.int32)])
+    np.save(out_path, arr)
+    return out_path, arr.shape[1]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--langs", required=True)
     ap.add_argument("--dim", type=int, default=96)
     ap.add_argument("--buckets", type=int, default=262144)
-    ap.add_argument("--vocab", type=int, default=150000)
-    ap.add_argument("--max-pairs", type=int, default=200_000_000)
-    ap.add_argument("--batch", type=int, default=8192)
-    ap.add_argument("--lr", type=float, default=3e-3)
+    ap.add_argument("--vocab", type=int, default=200000)
+    ap.add_argument("--max-pairs", type=int, default=300_000_000)
+    ap.add_argument("--batch", type=int, default=16384)
+    ap.add_argument("--lr", type=float, default=0.03)
+    ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-
     langs = args.langs.split(",")
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"device={device}", file=sys.stderr)
 
     sentences, lang_counts, lang_totals = load_sentences(langs)
-
-    merged: Counter = Counter()
+    merged = Counter()
     for c in lang_counts.values():
         merged.update(c)
     vocab = [t for t, c in merged.most_common(args.vocab) if c >= MIN_COUNT]
     vid = {t: i for i, t in enumerate(vocab)}
     counts = np.array([merged[t] for t in vocab], dtype=np.float64)
-    total_tokens = counts.sum()
+    freq = counts / counts.sum()
+    keep = np.minimum(1.0, np.sqrt(SUBSAMPLE_T / freq) + SUBSAMPLE_T / freq)
     print(f"vocab={len(vocab)}", file=sys.stderr)
 
-    # Precomputed subword buckets per vocab word, padded to MAX_NGRAMS
+    # ---- Phase 1: pair shards (fork BEFORE touching MPS) ----
+    cache = Path("models/pairs_cache")
+    cache.mkdir(parents=True, exist_ok=True)
+    shards = sorted(cache.glob("shard_*.npy"))
+    if not shards:
+        n_shards = max(args.workers * 2, math.ceil(len(sentences) / 200_000))
+        bounds = np.linspace(0, len(sentences), n_shards + 1, dtype=int)
+        jobs = [
+            (int(bounds[i]), int(bounds[i + 1]), str(cache / f"shard_{i:03d}.npy"))
+            for i in range(n_shards)
+        ]
+        t0 = time.time()
+        ctx = mp.get_context("fork")
+        with ctx.Pool(args.workers, _init_worker, (sentences, vid, keep)) as pool:
+            total = 0
+            for path, n in pool.imap_unordered(_gen_shard, jobs):
+                total += n
+                print(f"shard {path}: {n/1e6:.1f}M pairs ({total/1e6:.0f}M total)", file=sys.stderr)
+        print(f"pair generation: {total/1e6:.0f}M pairs in {(time.time()-t0)/60:.1f} min", file=sys.stderr)
+        shards = sorted(cache.glob("shard_*.npy"))
+    del sentences
+
+    # ---- Phase 2: training ----
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"device={device}", file=sys.stderr)
+    D, B = args.dim, args.buckets
+
     vb = np.zeros((len(vocab), MAX_NGRAMS), dtype=np.int64)
     vb_mask = np.zeros((len(vocab), MAX_NGRAMS), dtype=np.float32)
     for i, t in enumerate(vocab):
-        ids = token_buckets(t, args.buckets)
+        ids = token_buckets(t, B)
         vb[i, : len(ids)] = ids
         vb_mask[i, : len(ids)] = 1.0
     vb_t = torch.from_numpy(vb).to(device)
     vb_mask_t = torch.from_numpy(vb_mask).unsqueeze(-1).to(device)
     vb_n = vb_mask_t.sum(dim=1).clamp(min=1.0)
 
-    # Subsample keep probability + negative sampling table
-    freq = counts / total_tokens
-    keep = np.minimum(1.0, np.sqrt(SUBSAMPLE_T / freq) + SUBSAMPLE_T / freq)
-    # torch.multinomial segfaults on MPS (torch 2.11); use the classic word2vec
-    # trick instead: a big pre-sampled unigram^0.75 table + uniform indexing.
     neg_weights = counts**0.75
-    neg_lookup = np.random.choice(
-        len(vocab), size=10_000_000, p=neg_weights / neg_weights.sum()
-    ).astype(np.int64)
+    neg_lookup = np.random.choice(len(vocab), size=10_000_000, p=neg_weights / neg_weights.sum()).astype(np.int64)
 
-    bucket_emb = torch.nn.Embedding(args.buckets, args.dim, device=device)
-    torch.nn.init.uniform_(bucket_emb.weight, -0.5 / args.dim, 0.5 / args.dim)
-    out_emb = torch.nn.Embedding(len(vocab), args.dim, device=device)
-    torch.nn.init.zeros_(out_emb.weight)
-    opt = torch.optim.Adam(list(bucket_emb.parameters()) + list(out_emb.parameters()), lr=args.lr)
+    w_in = ((torch.rand(B, D, device=device) - 0.5) / D)
+    w_out = torch.zeros(len(vocab), D, device=device)
+    # f32: MPS has no float64; the tiny eigendecomposition upcasts on CPU
+    r_in = torch.zeros(D, D, device=device)
+    r_out = torch.zeros(D, D, device=device)
+    p_in = torch.eye(D, device=device)
+    p_out = torch.eye(D, device=device)
 
-    def gen_pairs():
-        """Yield (center_vid, ctx_vid) numpy chunks."""
-        centers, ctxs = [], []
-        for toks in sentences:
-            ids = [vid[t] for t in toks if t in vid]
-            ids = [i for i in ids if random.random() < keep[i]]
-            n = len(ids)
-            for j, c in enumerate(ids):
-                w = random.randint(1, WINDOW)
-                for k in range(max(0, j - w), min(n, j + w + 1)):
-                    if k != j:
-                        centers.append(c)
-                        ctxs.append(ids[k])
-            if len(centers) >= 2_000_000:
-                yield np.array(centers), np.array(ctxs)
-                centers, ctxs = [], []
-        if centers:
-            yield np.array(centers), np.array(ctxs)
+    def inv_sqrt(r: torch.Tensor) -> torch.Tensor:
+        m = r.cpu().double()
+        m = m / max(seen_pairs, 1)
+        eps = 1e-6 * torch.diagonal(m).mean().clamp(min=1e-12)
+        vals, vecs = torch.linalg.eigh(m + eps * torch.eye(D, dtype=torch.float64))
+        return (vecs @ torch.diag(vals.clamp(min=1e-12).rsqrt()) @ vecs.T).float().to(device)
 
-    logsig = torch.nn.functional.logsigmoid
     seen_pairs = 0
     step = 0
     t0 = time.time()
     done = False
-    for cen_np, ctx_np in gen_pairs():
-        perm = np.random.permutation(len(cen_np))
-        cen_np, ctx_np = cen_np[perm], ctx_np[perm]
+    for shard in shards:
+        arr = np.load(shard)
+        perm = np.random.permutation(arr.shape[1])
+        cen_np, ctx_np = arr[0][perm].astype(np.int64), arr[1][perm].astype(np.int64)
         for off in range(0, len(cen_np), args.batch):
             cen = torch.from_numpy(cen_np[off : off + args.batch]).to(device)
             ctx = torch.from_numpy(ctx_np[off : off + args.batch]).to(device)
             b = len(cen)
-            emb = (bucket_emb(vb_t[cen]) * vb_mask_t[cen]).sum(dim=1) / vb_n[cen]
-            pos = (emb * out_emb(ctx)).sum(dim=-1)
-            neg_ids = torch.from_numpy(
+            neg = torch.from_numpy(
                 neg_lookup[np.random.randint(0, len(neg_lookup), size=b * NEGATIVES)]
             ).view(b, NEGATIVES).to(device)
-            neg = torch.bmm(out_emb(neg_ids), emb.unsqueeze(-1)).squeeze(-1)
-            loss = -(logsig(pos).mean() + logsig(-neg).mean() * NEGATIVES)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
+
+            cb = vb_t[cen]                      # [b, NG]
+            cmask = vb_mask_t[cen]              # [b, NG, 1]
+            cn = vb_n[cen]                      # [b, 1]
+            e = (w_in[cb] * cmask).sum(1) / cn  # [b, D]
+            vc = w_out[ctx]                     # [b, D]
+            vn = w_out[neg]                     # [b, K, D]
+            s_pos = (e * vc).sum(-1)
+            s_neg = torch.bmm(vn, e.unsqueeze(-1)).squeeze(-1)
+
+            a_pos = torch.sigmoid(s_pos) - 1.0          # [b]
+            a_neg = torch.sigmoid(s_neg)                # [b, K]
+            g_e = a_pos.unsqueeze(-1) * vc + (a_neg.unsqueeze(-1) * vn).sum(1)
+            g_ctx = a_pos.unsqueeze(-1) * e             # [b, D]
+            g_neg = a_neg.unsqueeze(-1) * e.unsqueeze(1)  # [b, K, D]
+
+            r_in += g_e.T @ g_e
+            g_out_all = torch.cat([g_ctx, g_neg.reshape(-1, D)])
+            r_out += g_out_all.T @ g_out_all
+
+            # Row-mean accumulation: each example's contribution is divided by
+            # how many examples touch that row this batch, approximating
+            # sequential per-example SGD (plain sums explode on hot buckets,
+            # batch-size division starves cold ones).
+            scale = args.lr
+
+            def precondition(g: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
+                # Shampoo direction, SGD magnitude (row-wise grafting): without
+                # this, R^{-1/2} amplifies the tiny early gradients ~100x and
+                # the run NaNs right after the first refresh.
+                u = g @ p
+                gn = g.norm(dim=-1, keepdim=True)
+                un = u.norm(dim=-1, keepdim=True).clamp(min=1e-12)
+                return u * (gn / un)
+
+            flat_in = cb.reshape(-1)
+            # sqrt(count): sum explodes on hot rows, mean starves them; CLT
+            # scaling matches sequential-SGD progress within a constant.
+            cnt_in = torch.zeros(B, device=device).index_add_(
+                0, flat_in, cmask.reshape(-1)
+            ).clamp(min=1.0).sqrt()
+            g_rows = ((g_e / cn).unsqueeze(1) * cmask).reshape(-1, D)
+            w_in.index_add_(
+                0, flat_in, -scale * precondition(g_rows, p_in) / cnt_in[flat_in].unsqueeze(-1)
+            )
+
+            flat_out = torch.cat([ctx, neg.reshape(-1)])
+            g_out = torch.cat([g_ctx, g_neg.reshape(-1, D)])
+            cnt_out = torch.zeros(len(vocab), device=device).index_add_(
+                0, flat_out, torch.ones_like(flat_out, dtype=torch.float32)
+            ).clamp(min=1.0).sqrt()
+            w_out.index_add_(
+                0, flat_out, -scale * precondition(g_out, p_out) / cnt_out[flat_out].unsqueeze(-1)
+            )
+
             step += 1
             seen_pairs += b
+            if step % REFRESH == 0:
+                p_in = inv_sqrt(r_in)
+                p_out = inv_sqrt(r_out)
             if step % 200 == 0:
+                with torch.no_grad():
+                    loss = -(torch.nn.functional.logsigmoid(s_pos).mean()
+                             + torch.nn.functional.logsigmoid(-s_neg).mean() * NEGATIVES)
                 rate = seen_pairs / (time.time() - t0)
-                print(
-                    f"step {step} pairs {seen_pairs/1e6:.1f}M loss {loss.item():.4f} "
-                    f"({rate/1e3:.0f}k pairs/s)",
-                    file=sys.stderr,
-                )
+                print(f"step {step} pairs {seen_pairs/1e6:.1f}M loss {loss.item():.4f} "
+                      f"({rate/1e3:.0f}k pairs/s)", file=sys.stderr)
             if seen_pairs >= args.max_pairs:
                 done = True
                 break
@@ -184,12 +267,9 @@ def main() -> None:
             break
 
     Path("models").mkdir(exist_ok=True)
-    np.savez_compressed(
-        "models/joint.npz",
-        table=bucket_emb.weight.detach().cpu().numpy().astype(np.float32),
-        dim=args.dim,
-        buckets=args.buckets,
-    )
+    np.savez_compressed("models/joint.npz",
+                        table=w_in.cpu().numpy().astype(np.float32),
+                        dim=D, buckets=B)
     for lang in langs:
         with open(f"models/freq_{lang}.tsv", "w", encoding="utf-8") as f:
             f.write(f"__total__\t{lang_totals[lang]}\n")
