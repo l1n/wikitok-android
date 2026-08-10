@@ -1,0 +1,1 @@
+Better cross-language alignment (repeated-pair training); model compressed 5x with product quantization; app minified. 43MB -> 7.7MB total.

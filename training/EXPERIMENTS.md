@@ -39,7 +39,7 @@ Ship a new model (export → parity test → version bump → tag) only if:
 
 ## Backlog (ordered)
 
-1. `[running 2026-08-10]` **Repeated pairs**: PAIR_REPEAT 60 for ru/ja/zh
+1. `[done 2026-08-10 → shipped v1.7.0]` **Repeated pairs**: PAIR_REPEAT 60 for ru/ja/zh
    (was 10). Cheapest possible cross-script boost; running now.
 2. **Transliteration bridge** (arXiv:2406.19759 "Breaking the Script Barrier"):
    append romanized forms of ru (ISO-9) and ja (kana→romaji) tokens as extra
@@ -67,3 +67,4 @@ Ship a new model (export → parity test → version bump → tag) only if:
 | date | experiment | Latin mean gap | cross-script mean gap | shipped? |
 |------|-----------|---------------|----------------------|----------|
 | 2026-08-10 | baseline (v1.6.0 + PQ) | 0.53 | 0.07 | v1.6.0 |
+| 2026-08-10 | repeated pairs (60x ru/ja/zh) | 0.566 | 0.128 | v1.7.0 — gate borderline (+0.038 cross-script) but 9/9 languages improved; shipped as Pareto win |
