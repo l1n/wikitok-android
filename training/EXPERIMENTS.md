@@ -54,7 +54,7 @@ Ship a new model (export → parity test → version bump → tag) only if:
    biggest cross-script win.
 4. `[skipped 2026-08-11 — superseded by shipped rotations; revisit on plateau]` **Alignment fine-tune phase**: after main SGNS, freeze table except a final
    2×-repeated pass over ONLY code-switch pairs at low lr.
-5. `[running 2026-08-11]` **Hard negatives in SGNS** (cf. Conan-embedding, arXiv:2408.15710): sample
+5. `[done 2026-08-11 → shipped v1.9.0]` **Hard negatives in SGNS** (cf. Conan-embedding, arXiv:2408.15710): sample
    half the negatives from the same-language high-frequency band instead of
    the global unigram table — sharpens within-language topical structure.
 6. **More data**: 250MB/lang corpora (fetch cost ~2h; training 1.5 epochs).
@@ -71,3 +71,4 @@ Ship a new model (export → parity test → version bump → tag) only if:
 | 2026-08-10 | repeated pairs (60x ru/ja/zh) | 0.566 | 0.128 | v1.7.0 — gate borderline (+0.038 cross-script) but 9/9 languages improved; shipped as Pareto win |
 | 2026-08-10 | transliteration bridge (ru full, ja kana) | 0.564 | 0.129 | no — flat (ru +0.008, ja −0.007); kana-only coverage too partial, kanji dominates titles. Revisit only with a real pinyin/kanji dictionary |
 | 2026-08-10 | per-lang Procrustes rotations (holdout-fit, asset v4) | 0.573 | 0.164 | v1.8.0 — Pareto 9/9; shipped-artifact cross-script gaps +50-106% (ru 0.102→0.157, ja 0.054→0.082, zh 0.053→0.109). Fit on 8k pairs, evaluated on untouched 2k tail |
+| 2026-08-11 | in-batch hard negatives (2/pair, 2048 pool) | 0.701 | 0.195 | v1.9.0 — first clean gate pass (Latin +0.128). Probes de-blurred (basketball↔spacecraft 0.90→0.19); shuffled baseline collapsed 0.25→0.10. Shipped artifact: Latin 0.54→0.72, ru +0.07, ja/zh −0.02/−0.04 via PQ (noted). Training 80% slower (170min) |
