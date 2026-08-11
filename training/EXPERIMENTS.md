@@ -52,9 +52,9 @@ Ship a new model (export → parity test → version bump → tag) only if:
    Kotlin matmul). Train rotation on title-pair embeddings (closed form SVD).
    This sidesteps the shared-table limitation entirely and is likely the
    biggest cross-script win.
-4. **Alignment fine-tune phase**: after main SGNS, freeze table except a final
+4. `[skipped 2026-08-11 — superseded by shipped rotations; revisit on plateau]` **Alignment fine-tune phase**: after main SGNS, freeze table except a final
    2×-repeated pass over ONLY code-switch pairs at low lr.
-5. **Hard negatives in SGNS** (cf. Conan-embedding, arXiv:2408.15710): sample
+5. `[running 2026-08-11]` **Hard negatives in SGNS** (cf. Conan-embedding, arXiv:2408.15710): sample
    half the negatives from the same-language high-frequency band instead of
    the global unigram table — sharpens within-language topical structure.
 6. **More data**: 250MB/lang corpora (fetch cost ~2h; training 1.5 epochs).

@@ -115,6 +115,8 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=16384)
     ap.add_argument("--lr", type=float, default=0.03)
     ap.add_argument("--workers", type=int, default=5)
+    ap.add_argument("--hard-negs", type=int, default=0,
+                    help="in-batch hard negatives per pair (mined from a 2048-ctx pool)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
     random.seed(args.seed)
@@ -219,6 +221,20 @@ def main() -> None:
             g_ctx = a_pos.unsqueeze(-1) * e             # [b, D]
             g_neg = a_neg.unsqueeze(-1) * e.unsqueeze(1)  # [b, K, D]
 
+            # In-batch hard negatives: most-similar other contexts in a sampled
+            # pool. Kept few (vs K random) to bound false-negative damage.
+            if args.hard_negs > 0:
+                pool_pos = torch.randint(0, b, (min(2048, b),), device=device)
+                pool_ids = ctx[pool_pos]
+                sim = e @ w_out[pool_ids].T
+                sim = sim.masked_fill(pool_ids.unsqueeze(0) == ctx.unsqueeze(1), -1e9)
+                hard_ids = pool_ids[sim.topk(args.hard_negs, dim=1).indices]  # [b, H]
+                vh = w_out[hard_ids]
+                s_hard = torch.bmm(vh, e.unsqueeze(-1)).squeeze(-1)
+                a_hard = torch.sigmoid(s_hard)
+                g_e = g_e + (a_hard.unsqueeze(-1) * vh).sum(1)
+                g_hard = a_hard.unsqueeze(-1) * e.unsqueeze(1)
+
             r_in += g_e.T @ g_e
             g_out_all = torch.cat([g_ctx, g_neg.reshape(-1, D)])
             r_out += g_out_all.T @ g_out_all
@@ -249,8 +265,12 @@ def main() -> None:
                 0, flat_in, -scale * precondition(g_rows, p_in) / cnt_in[flat_in].unsqueeze(-1)
             )
 
-            flat_out = torch.cat([ctx, neg.reshape(-1)])
-            g_out = torch.cat([g_ctx, g_neg.reshape(-1, D)])
+            if args.hard_negs > 0:
+                flat_out = torch.cat([ctx, neg.reshape(-1), hard_ids.reshape(-1)])
+                g_out = torch.cat([g_ctx, g_neg.reshape(-1, D), g_hard.reshape(-1, D)])
+            else:
+                flat_out = torch.cat([ctx, neg.reshape(-1)])
+                g_out = torch.cat([g_ctx, g_neg.reshape(-1, D)])
             cnt_out = torch.zeros(len(vocab), device=device).index_add_(
                 0, flat_out, torch.ones_like(flat_out, dtype=torch.float32)
             ).clamp(min=1.0).sqrt()
