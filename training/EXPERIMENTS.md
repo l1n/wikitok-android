@@ -57,8 +57,9 @@ Ship a new model (export → parity test → version bump → tag) only if:
 5. `[done 2026-08-11 → shipped v1.9.0]` **Hard negatives in SGNS** (cf. Conan-embedding, arXiv:2408.15710): sample
    half the negatives from the same-language high-frequency band instead of
    the global unigram table — sharpens within-language topical structure.
-6. **More data**: 250MB/lang corpora (fetch cost ~2h; training 1.5 epochs).
-7. **nanoGPT-style tiny transformer encoder** (2 layers, dim 96, mean-pooled,
+6. **PQ-aware refinement**: quantization now costs ja/zh ~0.03 gap — try k=512 codebooks for cross-script-heavy buckets, or fit rotations on the PQ-reconstructed table instead of the full one (zero-size-cost). 
+7. **More data**: 250MB/lang corpora (fetch cost ~2h; training 1.5 epochs).
+8. **nanoGPT-style tiny transformer encoder** (2 layers, dim 96, mean-pooled,
    SimCSE-ish objective on intro paragraphs + title pairs): would replace the
    bag-of-subwords entirely; needs Kotlin matmul inference (~150 lines) and a
    full training day. High risk / high ceiling; attempt only if 2–5 plateau.
