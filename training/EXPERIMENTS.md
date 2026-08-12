@@ -57,7 +57,7 @@ Ship a new model (export → parity test → version bump → tag) only if:
 5. `[done 2026-08-11 → shipped v1.9.0]` **Hard negatives in SGNS** (cf. Conan-embedding, arXiv:2408.15710): sample
    half the negatives from the same-language high-frequency band instead of
    the global unigram table — sharpens within-language topical structure.
-6. **PQ-aware refinement**: quantization now costs ja/zh ~0.03 gap — try k=512 codebooks for cross-script-heavy buckets, or fit rotations on the PQ-reconstructed table instead of the full one (zero-size-cost). 
+6. `[done 2026-08-11 → shipped v1.9.1]` **PQ-aware refinement**: quantization now costs ja/zh ~0.03 gap — try k=512 codebooks for cross-script-heavy buckets, or fit rotations on the PQ-reconstructed table instead of the full one (zero-size-cost). 
 7. **More data**: 250MB/lang corpora (fetch cost ~2h; training 1.5 epochs).
 8. **nanoGPT-style tiny transformer encoder** (2 layers, dim 96, mean-pooled,
    SimCSE-ish objective on intro paragraphs + title pairs): would replace the
@@ -73,3 +73,4 @@ Ship a new model (export → parity test → version bump → tag) only if:
 | 2026-08-10 | transliteration bridge (ru full, ja kana) | 0.564 | 0.129 | no — flat (ru +0.008, ja −0.007); kana-only coverage too partial, kanji dominates titles. Revisit only with a real pinyin/kanji dictionary |
 | 2026-08-10 | per-lang Procrustes rotations (holdout-fit, asset v4) | 0.573 | 0.164 | v1.8.0 — Pareto 9/9; shipped-artifact cross-script gaps +50-106% (ru 0.102→0.157, ja 0.054→0.082, zh 0.053→0.109). Fit on 8k pairs, evaluated on untouched 2k tail |
 | 2026-08-11 | in-batch hard negatives (2/pair, 2048 pool) | 0.701 | 0.195 | v1.9.0 — first clean gate pass (Latin +0.128). Probes de-blurred (basketball↔spacecraft 0.90→0.19); shuffled baseline collapsed 0.25→0.10. Shipped artifact: Latin 0.54→0.72, ru +0.07, ja/zh −0.02/−0.04 via PQ (noted). Training 80% slower (170min) |
+| 2026-08-11 | post-PQ rotation refit (zero cost) | 0.72 (shipped) | 0.157 (shipped) | v1.9.1 — recovers PQ damage on cross-script: ja +65%, zh +68%, ru +6%, Latin flat. Rotations now always fit on the quantized table |

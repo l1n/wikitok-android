@@ -93,10 +93,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--langs", required=True)
     ap.add_argument("--rotations", default="models/rotations.npz")
+    ap.add_argument("--fit-rotations-post-pq", action="store_true",
+                    help="refit rotations on the PQ-reconstructed table (compensates quantization error)")
     args = ap.parse_args()
     langs = args.langs.split(",")
     rotations = {}
-    if Path(args.rotations).exists():
+    if not args.fit_rotations_post_pq and Path(args.rotations).exists():
         r = np.load(args.rotations)
         rotations = {k: r[k].astype(np.float32) for k in r.files}
         print(f"rotations: {sorted(rotations)}")
@@ -124,6 +126,12 @@ def main() -> None:
     # Common component from the quantized table (what the app will see)
     pre = RefEmbedder(dq, buckets, freqs, totals)
     mean = compute_mean(pre, langs)
+
+    if args.fit_rotations_post_pq:
+        from rotate import fit_rotations
+        pre.mean = mean
+        rotations = fit_rotations(pre, langs)
+        print(f"rotations refit post-PQ: {sorted(rotations)}")
 
     out = Path("../app/src/main/assets/wiki_embeddings.bin")
     out.parent.mkdir(parents=True, exist_ok=True)

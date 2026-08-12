@@ -18,19 +18,9 @@ from embed_ref import RefEmbedder, compute_mean, load_freqs
 HOLDOUT = 2000  # matches eval.py --sample default
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--langs", required=True)
-    args = ap.parse_args()
-    langs = args.langs.split(",")
-
-    m = np.load("models/joint.npz")
-    table, buckets = m["table"], int(m["buckets"])
-    freqs, totals = load_freqs(langs)
-    emb = RefEmbedder(table, buckets, freqs, totals)
-    emb.mean = compute_mean(emb, langs)
-
-    rotations = {}
+def fit_rotations(emb: RefEmbedder, langs: list[str]) -> dict[str, np.ndarray]:
+    """Orthogonal Procrustes per language on pairs[:-HOLDOUT] (eval-honest)."""
+    rotations: dict[str, np.ndarray] = {}
     for lang in langs:
         if lang == "en":
             continue
@@ -50,7 +40,22 @@ def main() -> None:
         fit = float(((x @ w) * y).sum(1).mean())
         base = float((x * y).sum(1).mean())
         print(f"{lang}: train-pair cos {base:.3f} -> {fit:.3f}  [n={len(rows)}]")
+    return rotations
 
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--langs", required=True)
+    args = ap.parse_args()
+    langs = args.langs.split(",")
+
+    m = np.load("models/joint.npz")
+    table, buckets = m["table"], int(m["buckets"])
+    freqs, totals = load_freqs(langs)
+    emb = RefEmbedder(table, buckets, freqs, totals)
+    emb.mean = compute_mean(emb, langs)
+
+    rotations = fit_rotations(emb, langs)
     np.savez_compressed("models/rotations.npz", **rotations)
     print(f"saved {len(rotations)} rotations")
 

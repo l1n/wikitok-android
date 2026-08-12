@@ -14,8 +14,8 @@ android {
         applicationId = "com.novalinium.wikitok"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.9.0"
+        versionCode = 10
+        versionName = "1.9.1"
     }
 
     // CI signs with the real key (from repo secrets); local builds without the
